@@ -1,0 +1,236 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 24px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+}
+
+header h1 {
+    font-size: 18px;
+    color: #58a6ff;
+}
+
+#status-bar {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    align-items: center;
+}
+
+.status {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.status.idle, .status.pending { background: #30363d; color: #8b949e; }
+.status.running { background: #1f6feb33; color: #58a6ff; }
+.status.done, .status.completed { background: #23863533; color: #3fb950; }
+.status.failed { background: #f8514933; color: #f85149; }
+
+/* ============================================================
+   View toggle: episode list vs episode detail
+   ============================================================ */
+
+#view-list, #view-detail {
+    display: none;
+}
+#view-list.active, #view-detail.active {
+    display: block;
+}
+
+/* Episode list */
+#episode-list-container {
+    padding: 24px;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.episode-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.episode-card:hover {
+    border-color: #58a6ff;
+}
+.episode-card .ep-task {
+    font-size: 15px;
+    color: #c9d1d9;
+    margin-bottom: 6px;
+}
+.episode-card .ep-meta {
+    font-size: 12px;
+    color: #8b949e;
+    display: flex;
+    gap: 16px;
+}
+
+#back-btn {
+    background: none;
+    border: 1px solid #30363d;
+    color: #58a6ff;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-right: 12px;
+}
+#back-btn:hover { border-color: #58a6ff; }
+
+/* Detail view layout */
+main {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 1px;
+    height: calc(100vh - 49px);
+    background: #30363d;
+}
+
+section {
+    background: #0d1117;
+    padding: 16px;
+    overflow-y: auto;
+}
+
+h2 {
+    font-size: 14px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
+#graph-svg {
+    width: 100%;
+    height: calc(100vh - 100px);
+}
+
+/* Graph node styles */
+.node circle {
+    stroke-width: 2;
+    cursor: pointer;
+}
+.node text {
+    font-size: 10px;
+    fill: #c9d1d9;
+    pointer-events: none;
+}
+.link {
+    stroke: #30363d;
+    stroke-width: 1.5;
+    fill: none;
+}
+.link.active { stroke: #58a6ff; }
+
+/* Template colors */
+.template-planner { fill: #f0883e; stroke: #f0883e; }
+.template-repo_mapper { fill: #8b949e; stroke: #8b949e; }
+.template-coder { fill: #58a6ff; stroke: #58a6ff; }
+.template-verifier_coordinator { fill: #3fb950; stroke: #3fb950; }
+.template-debugger { fill: #f85149; stroke: #f85149; }
+.template-test_writer { fill: #bc8cff; stroke: #bc8cff; }
+.template-skeptic_reviewer { fill: #d2a8ff; stroke: #d2a8ff; }
+.template-security_reviewer { fill: #ff7b72; stroke: #ff7b72; }
+.template-regression_reviewer { fill: #ffa657; stroke: #ffa657; }
+.template-synthesizer { fill: #79c0ff; stroke: #79c0ff; }
+
+/* Details panel */
+#details-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: #30363d;
+}
+
+#details-panel > div {
+    background: #0d1117;
+    padding: 16px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.artifact-item {
+    padding: 8px;
+    margin-bottom: 4px;
+    background: #161b22;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 3px solid #30363d;
+}
+
+.artifact-item:hover {
+    background: #1c2128;
+}
+
+.artifact-item .type { color: #58a6ff; font-weight: 600; }
+.artifact-item .summary { color: #8b949e; margin-top: 2px; }
+
+.log-entry {
+    font-size: 11px;
+    padding: 3px 0;
+    border-bottom: 1px solid #21262d;
+    font-family: monospace;
+}
+
+.log-entry .event-type {
+    color: #58a6ff;
+    font-weight: 600;
+}
+
+/* Realtime indicator */
+.realtime-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3fb950;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+}
+.realtime-dot.disconnected { background: #f85149; animation: none; }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Branch scores bar */
+.branch-score {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+.branch-score .bar {
+    flex: 1;
+    height: 6px;
+    background: #21262d;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.branch-score .bar-fill {
+    height: 100%;
+    background: #58a6ff;
+    border-radius: 3px;
+    transition: width 0.3s;
+}

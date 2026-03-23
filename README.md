@@ -47,6 +47,75 @@ Budget defaults:
 
 Override via CLI flags: `--budget-tokens`, `--budget-rounds`, `--budget-time`.
 
+## Web Deployment (Supabase + Vercel)
+
+PlasticAgentNet can be deployed as a web application with a live dashboard:
+
+- **Supabase Postgres**: Persistent state for episodes, graph, artifacts, events
+- **Supabase Realtime**: Live websocket updates to the dashboard
+- **Supabase Edge Function**: Runs the episode loop server-side
+- **Vercel**: Hosts the static dashboard and thin API routes
+
+### Setup
+
+1. **Create Supabase project** at [supabase.com](https://supabase.com)
+
+2. **Run migrations**:
+```bash
+npx supabase init
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase db push
+```
+
+3. **Deploy Edge Function**:
+```bash
+supabase functions deploy run-episode
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+4. **Configure dashboard**: Edit `public/config.js` with your Supabase URL and anon key.
+
+5. **Deploy to Vercel**:
+```bash
+vercel --prod
+```
+
+Set these Vercel environment variables:
+- `SUPABASE_URL` — your project URL
+- `SUPABASE_SERVICE_ROLE_KEY` — for the API route auth
+- `SUPABASE_ANON_KEY` — for client-side reads
+
+### Run with Supabase persistence
+
+```bash
+export SUPABASE_URL=https://xxx.supabase.co
+export SUPABASE_SERVICE_ROLE_KEY=eyJ...
+pan run --supabase "Fix the typo in utils.py" --repo .
+```
+
+Results appear on the dashboard in real-time.
+
+### List past episodes
+
+```bash
+pan episodes
+```
+
+### Environment Variables
+
+| Variable | Where | Purpose |
+|----------|-------|---------|
+| `ANTHROPIC_API_KEY` | Supabase secrets | LLM API calls from Edge Function |
+| `SUPABASE_URL` | Vercel env, Python env | Database URL |
+| `SUPABASE_ANON_KEY` | Vercel env, `public/config.js` | Public read access |
+| `SUPABASE_SERVICE_ROLE_KEY` | Vercel env (server), Supabase secrets, Python env | Full write access |
+
+### Access Model
+
+- **Public visitors**: View-only — browse past episodes, watch replays, inspect graphs/artifacts
+- **Owner only**: Start new episodes via CLI (`pan run --supabase`) or authenticated API
+- No public "start episode" button — protects API key costs
+
 ## Project Structure
 
 ```
@@ -62,7 +131,16 @@ src/plastic_agent_net/
 ├── runtime/            # Dispatcher, episode lifecycle, verifier, task encoder
 ├── eval/               # JSONL logging and episode replay
 ├── llm/                # Async Anthropic client wrapper
-└── dashboard/          # FastAPI + SSE + D3.js web UI
+├── db/                 # Supabase client, repository, graph adapter
+└── dashboard/          # FastAPI + SSE + D3.js web UI (local)
+
+supabase/
+├── migrations/         # Postgres schema (tables, RLS, functions)
+└── functions/
+    └── run-episode/    # Edge Function (TypeScript episode runner)
+
+public/                 # Vercel static dashboard (Supabase Realtime + D3.js)
+api/                    # Vercel serverless routes
 ```
 
 ## Testing

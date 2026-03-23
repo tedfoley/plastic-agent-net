@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlasticAgentNet Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/config.js"></script>
+</head>
+<body>
+    <header>
+        <div style="display: flex; align-items: center;">
+            <button id="back-btn" style="display:none" onclick="showEpisodeList()">Back</button>
+            <h1>PlasticAgentNet</h1>
+        </div>
+        <div id="status-bar">
+            <span class="realtime-dot" id="realtime-dot"></span>
+            <span id="status-indicator" class="status idle">idle</span>
+            <span id="round-counter">Round: —</span>
+            <span id="token-counter">Tokens: —</span>
+            <span id="node-counter">Nodes: —</span>
+        </div>
+    </header>
+
+    <!-- Episode List View -->
+    <div id="view-list" class="active">
+        <div id="episode-list-container">
+            <h2>Episodes</h2>
+            <div id="episode-list"></div>
+            <p id="no-episodes" style="color: #8b949e; font-size: 13px; display:none;">
+                No episodes yet. Run <code>pan run --supabase "task"</code> to create one.
+            </p>
+        </div>
+    </div>
+
+    <!-- Episode Detail View -->
+    <div id="view-detail">
+        <main>
+            <section id="graph-panel">
+                <h2>Agent Graph</h2>
+                <div id="branch-scores"></div>
+                <svg id="graph-svg" width="100%" height="500"></svg>
+            </section>
+
+            <section id="details-panel">
+                <div id="artifacts-panel">
+                    <h2>Artifacts</h2>
+                    <div id="artifact-list"></div>
+                </div>
+
+                <div id="log-panel">
+                    <h2>Live Log</h2>
+                    <div id="log-stream"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

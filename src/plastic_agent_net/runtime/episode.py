@@ -51,6 +51,7 @@ class Episode:
         repo_path: str = "",
         budget_config: BudgetConfig | None = None,
         event_callback: Callable[[dict], None] | None = None,
+        supabase_repo: Any | None = None,
     ) -> None:
         self._llm = llm
         self._repo_path = repo_path
@@ -65,10 +66,21 @@ class Episode:
             self._graph, self._artifact_store, self._message_bus, self._budget
         )
         self._event_cb = event_callback
+        self._supabase_repo = supabase_repo
+        self._episode_id: str | None = None
 
     async def run(self, user_request: str) -> EpisodeResult:
         """Execute a full episode: encode → seed → loop → output."""
         result = EpisodeResult(task_summary=user_request)
+
+        # Create Supabase episode record if connected
+        if self._supabase_repo:
+            self._episode_id = self._supabase_repo.create_episode(
+                task=user_request,
+                repo_path=self._repo_path,
+                budget_config=self._budget.config,
+            )
+            self._supabase_repo.update_episode(self._episode_id, status="running")
 
         try:
             # 1. Encode the task
@@ -78,6 +90,7 @@ class Episode:
 
             # 2. Build seed graph
             self._build_seed_graph(task_profile.raw_request)
+            self._sync_to_supabase()
 
             # 3. Create workspace for main branch
             await self._workspace_manager.create("main")
@@ -124,6 +137,9 @@ class Episode:
                     "branch_scores": ctrl_state.branch_scores,
                 })
 
+                # Write-behind: sync state to Supabase after each round
+                self._sync_to_supabase(current_round, ctrl_state)
+
                 self._budget.new_round()
 
                 # Check convergence
@@ -160,6 +176,17 @@ class Episode:
             for a in self._artifact_store.list_all()
         ]
         result.branch_scores = dict(self._controller._state.branch_scores)
+
+        # Finalize Supabase episode
+        if self._supabase_repo and self._episode_id:
+            self._supabase_repo.update_episode(
+                self._episode_id,
+                status="completed" if "error" not in result.terminated_reason else "failed",
+                rounds_completed=result.rounds_completed,
+                tokens_used=result.tokens_used,
+                branch_scores=result.branch_scores,
+                terminated_reason=result.terminated_reason,
+            )
 
         self._emit({"event": "episode_complete", "result": result.__dict__})
         return result
@@ -226,6 +253,37 @@ class Episode:
         for node in self._graph.all_nodes():
             if node.status == NodeStatus.DONE:
                 node.status = NodeStatus.PENDING
+
+    def _sync_to_supabase(
+        self, current_round: int | None = None, ctrl_state: ControllerState | None = None
+    ) -> None:
+        """Write-behind: persist current state to Supabase after each round."""
+        if not self._supabase_repo or not self._episode_id:
+            return
+        try:
+            self._supabase_repo.sync_graph_state(
+                self._episode_id,
+                self._graph.all_nodes(),
+                self._graph.all_edges(),
+            )
+            self._supabase_repo.sync_artifacts(
+                self._episode_id,
+                self._artifact_store.list_all(),
+            )
+            if current_round is not None:
+                self._supabase_repo.update_episode(
+                    self._episode_id,
+                    rounds_completed=current_round + 1,
+                    tokens_used=self._budget.usage.total_tokens,
+                    branch_scores=dict(ctrl_state.branch_scores) if ctrl_state else {},
+                )
+            if ctrl_state:
+                for action in ctrl_state.actions_taken:
+                    self._supabase_repo.insert_controller_action(
+                        self._episode_id, action, current_round or 0
+                    )
+        except Exception:
+            logger.warning("Failed to sync to Supabase", exc_info=True)
 
     def _emit(self, event: dict) -> None:
         if self._event_cb:

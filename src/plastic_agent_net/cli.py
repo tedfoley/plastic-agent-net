@@ -27,9 +27,10 @@ def cli() -> None:
 @click.option("--budget-time", type=float, default=600.0, help="Max wall-clock seconds")
 @click.option("--log", "-l", type=click.Path(), default=None, help="JSONL log file path")
 @click.option("--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key")
-def run(task: str, repo: str, budget_tokens: int, budget_rounds: int, budget_time: float, log: str | None, api_key: str | None) -> None:
+@click.option("--supabase", "use_supabase", is_flag=True, default=False, help="Persist to Supabase")
+def run(task: str, repo: str, budget_tokens: int, budget_rounds: int, budget_time: float, log: str | None, api_key: str | None, use_supabase: bool) -> None:
     """Run a coding task on a repository."""
-    asyncio.run(_run_episode(task, repo, budget_tokens, budget_rounds, budget_time, log, api_key))
+    asyncio.run(_run_episode(task, repo, budget_tokens, budget_rounds, budget_time, log, api_key, use_supabase))
 
 
 async def _run_episode(
@@ -40,6 +41,7 @@ async def _run_episode(
     budget_time: float,
     log_path: str | None,
     api_key: str | None,
+    use_supabase: bool = False,
 ) -> None:
     from plastic_agent_net.core.models import BudgetConfig
     from plastic_agent_net.eval.logging import EventLogger, make_event_callback
@@ -55,10 +57,18 @@ async def _run_episode(
     llm = AnthropicClient(api_key=api_key)
     event_cb = None
     event_logger = None
+    supabase_repo = None
 
     if log_path:
         event_logger = EventLogger(log_path)
         event_cb = make_event_callback(event_logger)
+
+    if use_supabase:
+        from plastic_agent_net.db.client import get_supabase_client
+        from plastic_agent_net.db.repository import SupabaseRepository
+        sb = get_supabase_client()
+        supabase_repo = SupabaseRepository(sb)
+        click.echo("Supabase persistence enabled")
 
     def _print_and_log(event: dict) -> None:
         etype = event.get("event", "")
@@ -83,6 +93,7 @@ async def _run_episode(
         repo_path=str(Path(repo).resolve()),
         budget_config=budget,
         event_callback=_print_and_log,
+        supabase_repo=supabase_repo,
     )
 
     click.echo(f"PlasticAgentNet v{__version__}")
@@ -150,6 +161,31 @@ def dashboard(host: str, port: int) -> None:
     app = create_app()
     click.echo(f"Dashboard at http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
+
+
+@cli.command()
+@click.option("--limit", "-n", type=int, default=20, help="Number of episodes to show")
+def episodes(limit: int) -> None:
+    """List recent episodes from Supabase."""
+    from plastic_agent_net.db.client import get_supabase_client
+    from plastic_agent_net.db.repository import SupabaseRepository
+
+    sb = get_supabase_client()
+    repo = SupabaseRepository(sb)
+    rows = repo.list_episodes(limit=limit)
+
+    if not rows:
+        click.echo("No episodes found.")
+        return
+
+    click.echo(f"{'ID':<38} {'Status':<12} {'Rounds':<8} {'Task'}")
+    click.echo("-" * 90)
+    for ep in rows:
+        eid = ep["id"][:36]
+        status = ep.get("status", "?")
+        rounds = ep.get("rounds_completed", 0)
+        task = ep.get("task", "")[:40]
+        click.echo(f"{eid:<38} {status:<12} {rounds:<8} {task}")
 
 
 if __name__ == "__main__":

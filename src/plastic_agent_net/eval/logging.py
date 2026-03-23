@@ -41,7 +41,32 @@ class EventLogger:
         self.close()
 
 
-def make_event_callback(logger: EventLogger):
+class SupabaseEventLogger:
+    """Writes structured events to Supabase events table."""
+
+    def __init__(self, episode_id: str, repository: Any) -> None:
+        self._episode_id = episode_id
+        self._repo = repository
+        self._start = time.time()
+
+    def log(self, event: dict[str, Any]) -> None:
+        """Write an event to Supabase."""
+        event_type = event.get("event", "unknown")
+        round_num = event.get("round")
+        payload = {
+            "ts": time.time() - self._start,
+            **{k: v for k, v in event.items() if k not in ("event", "round")},
+        }
+        try:
+            self._repo.insert_event(self._episode_id, event_type, round_num, payload)
+        except Exception:
+            pass  # Don't fail the episode if event logging fails
+
+    def close(self) -> None:
+        pass  # No cleanup needed for Supabase
+
+
+def make_event_callback(logger: EventLogger | SupabaseEventLogger):
     """Create an event callback function for Episode."""
 
     def callback(event: dict[str, Any]) -> None:
