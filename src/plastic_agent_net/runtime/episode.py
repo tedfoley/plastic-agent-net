@@ -120,13 +120,23 @@ class Episode:
 
                 # Verify branches
                 for branch_id in self._graph.branch_ids():
-                    verif = await self._verifier.evaluate_branch(branch_id, current_round)
-                    self._emit({
-                        "event": "verification",
-                        "branch": branch_id,
-                        "score": verif.overall_score,
-                        "issues": len(verif.blocking_issues),
-                    })
+                    try:
+                        verif = await self._verifier.evaluate_branch(branch_id, current_round)
+                        self._emit({
+                            "event": "verification",
+                            "branch": branch_id,
+                            "score": verif.overall_score,
+                            "issues": len(verif.blocking_issues),
+                        })
+                    except Exception as verif_err:
+                        logger.warning("Verification failed for branch %s: %s", branch_id, verif_err)
+                        self._emit({
+                            "event": "verification",
+                            "branch": branch_id,
+                            "score": 0.0,
+                            "issues": 1,
+                            "error": str(verif_err),
+                        })
 
                 # Controller step
                 ctrl_state = self._controller.step(current_round)
@@ -162,31 +172,34 @@ class Episode:
         finally:
             await self._workspace_manager.cleanup_all()
 
-        # Gather final results
-        result.rounds_completed = self._budget.usage.rounds_completed
-        result.tokens_used = self._budget.usage.total_tokens
-        result.final_artifacts = [
-            {
-                "id": a.artifact_id,
-                "type": a.artifact_type.value,
-                "branch": a.branch_id,
-                "summary": a.summary,
-                "content": a.content,
-            }
-            for a in self._artifact_store.list_all()
-        ]
-        result.branch_scores = dict(self._controller._state.branch_scores)
+            # Gather final results
+            result.rounds_completed = self._budget.usage.rounds_completed
+            result.tokens_used = self._budget.usage.total_tokens
+            result.final_artifacts = [
+                {
+                    "id": a.artifact_id,
+                    "type": a.artifact_type.value,
+                    "branch": a.branch_id,
+                    "summary": a.summary,
+                    "content": a.content,
+                }
+                for a in self._artifact_store.list_all()
+            ]
+            result.branch_scores = dict(self._controller._state.branch_scores)
 
-        # Finalize Supabase episode
-        if self._supabase_repo and self._episode_id:
-            self._supabase_repo.update_episode(
-                self._episode_id,
-                status="completed" if "error" not in result.terminated_reason else "failed",
-                rounds_completed=result.rounds_completed,
-                tokens_used=result.tokens_used,
-                branch_scores=result.branch_scores,
-                terminated_reason=result.terminated_reason,
-            )
+            # Finalize Supabase episode — inside finally so it always runs
+            if self._supabase_repo and self._episode_id:
+                try:
+                    self._supabase_repo.update_episode(
+                        self._episode_id,
+                        status="completed" if "error" not in result.terminated_reason else "failed",
+                        rounds_completed=result.rounds_completed,
+                        tokens_used=result.tokens_used,
+                        branch_scores=result.branch_scores,
+                        terminated_reason=result.terminated_reason,
+                    )
+                except Exception:
+                    logger.warning("Failed to finalize episode in Supabase", exc_info=True)
 
         self._emit({"event": "episode_complete", "result": result.__dict__})
         return result
@@ -288,6 +301,29 @@ class Episode:
     def _emit(self, event: dict) -> None:
         if self._event_cb:
             self._event_cb(event)
+
+        # Persist event to Supabase for dashboard Live Log
+        if self._supabase_repo and self._episode_id:
+            try:
+                event_type = event.get("event", "unknown")
+                round_num = event.get("round")
+                # Store the full event dict as payload, excluding the 'event' key
+                # Convert values to JSON-safe types
+                payload = {}
+                for k, v in event.items():
+                    if k == "event":
+                        continue
+                    try:
+                        import json
+                        json.dumps(v)
+                        payload[k] = v
+                    except (TypeError, ValueError):
+                        payload[k] = str(v)
+                self._supabase_repo.insert_event(
+                    self._episode_id, event_type, round_num, payload
+                )
+            except Exception:
+                logger.debug("Failed to persist event to Supabase", exc_info=True)
 
     # Expose internals for dashboard/testing
     @property
