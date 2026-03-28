@@ -50,13 +50,16 @@ async def _detect_security_scanner(workspace_path: str) -> list[str]:
 
     # Python: try bandit
     if any((ws / f).exists() for f in ("pyproject.toml", "setup.py")):
-        proc = await asyncio.create_subprocess_exec(
-            "bandit", "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-        if proc.returncode == 0:
-            return ["bandit", "-r", ".", "-f", "json", "-q"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bandit", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode == 0:
+                return ["bandit", "-r", ".", "-f", "json", "-q"]
+        except FileNotFoundError:
+            pass
 
     return []

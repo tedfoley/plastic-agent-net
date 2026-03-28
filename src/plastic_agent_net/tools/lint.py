@@ -52,14 +52,17 @@ async def _detect_lint_command(workspace_path: str) -> list[str]:
     if any((ws / f).exists() for f in ("pyproject.toml", "setup.py", "setup.cfg")):
         # Try ruff first, then flake8
         for linter in [["ruff", "check", "."], ["flake8", "."]]:
-            proc = await asyncio.create_subprocess_exec(
-                linter[0], "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            if proc.returncode == 0:
-                return linter
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    linter[0], "--version",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+                if proc.returncode == 0:
+                    return linter
+            except FileNotFoundError:
+                continue
 
     # JS/TS linters
     if (ws / "package.json").exists():
