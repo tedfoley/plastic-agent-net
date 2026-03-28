@@ -62,14 +62,24 @@ class AnthropicClient:
 
         parsed = None
         if json_schema is not None:
+            # Strip markdown code fences if present
+            text = content.strip()
+            if text.startswith("```"):
+                first_newline = text.find("\n")
+                if first_newline >= 0:
+                    text = text[first_newline + 1:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+
             try:
-                parsed = json.loads(content)
+                parsed = json.loads(text)
             except json.JSONDecodeError:
-                start = content.find("{")
-                end = content.rfind("}") + 1
+                start = text.find("{")
+                end = text.rfind("}") + 1
                 if start >= 0 and end > start:
                     try:
-                        parsed = json.loads(content[start:end])
+                        parsed = json.loads(text[start:end])
                     except json.JSONDecodeError:
                         logger.warning("Failed to parse JSON from LLM response")
 
