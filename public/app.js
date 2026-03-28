@@ -1,5 +1,4 @@
 // PlasticAgentNet Dashboard — Supabase Realtime + D3.js
-// Replaces SSE with Supabase Realtime subscriptions
 
 // ============================================================
 // Supabase Client
@@ -18,48 +17,106 @@ let realtimeChannel = null;
 let simulation = null;
 let linkGroup = null;
 let nodeGroup = null;
+let graphNodes = [];  // Persistent node objects for D3 simulation
+let graphLinks = [];  // Persistent link objects for D3 simulation
 
 function initGraph() {
     const svg = d3.select("#graph-svg");
+    svg.selectAll("*").remove();
+
+    // Reset persistent state
+    graphNodes = [];
+    graphLinks = [];
+
+    // Add a root <g> for zoom/pan
+    const rootG = svg.append("g").attr("class", "graph-root");
+    linkGroup = rootG.append("g").attr("class", "links");
+    nodeGroup = rootG.append("g").attr("class", "nodes");
+
+    // Enable zoom & pan
+    const zoom = d3.zoom()
+        .scaleExtent([0.3, 3])
+        .on("zoom", (event) => rootG.attr("transform", event.transform));
+    svg.call(zoom);
+
     const rect = svg.node().getBoundingClientRect();
     const width = rect.width || 800;
     const height = rect.height || 500;
 
-    svg.selectAll("*").remove();
-
-    linkGroup = svg.append("g").attr("class", "links");
-    nodeGroup = svg.append("g").attr("class", "nodes");
-
     simulation = d3.forceSimulation()
-        .force("link", d3.forceLink().id(d => d.id).distance(100))
-        .force("charge", d3.forceManyBody().strength(-300))
+        .force("link", d3.forceLink().id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-400))
         .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide(30));
+        .force("collision", d3.forceCollide(40))
+        .on("tick", ticked);
+}
+
+function ticked() {
+    if (!linkGroup || !nodeGroup) return;
+
+    linkGroup.selectAll("line")
+        .attr("x1", d => d.source.x)
+        .attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x)
+        .attr("y2", d => d.target.y);
+
+    nodeGroup.selectAll("g.node")
+        .attr("transform", d => `translate(${d.x},${d.y})`);
 }
 
 function updateGraph(nodes, edges) {
     if (!simulation || !linkGroup || !nodeGroup) return;
 
-    // Filter to non-pruned nodes for display
+    // Filter to non-pruned nodes
     const displayNodes = nodes.filter(n => n.status !== "pruned");
     const displayNodeIds = new Set(displayNodes.map(n => n.id));
     const displayEdges = edges.filter(e =>
-        e.active && displayNodeIds.has(e.source_node) && displayNodeIds.has(e.target_node)
+        displayNodeIds.has(e.source_node) && displayNodeIds.has(e.target_node)
     );
 
-    // Links
+    // --- Merge new data into persistent graphNodes (preserve positions) ---
+    const existingById = new Map(graphNodes.map(n => [n.id, n]));
+    const newNodeIds = new Set(displayNodes.map(n => n.id));
+
+    // Remove nodes no longer present
+    graphNodes = graphNodes.filter(n => newNodeIds.has(n.id));
+
+    // Update existing / add new
+    for (const n of displayNodes) {
+        const existing = existingById.get(n.id);
+        if (existing) {
+            // Update mutable fields, keep x/y
+            existing.template = n.template;
+            existing.status = n.status;
+        } else {
+            // New node — let simulation place it
+            graphNodes.push({ id: n.id, template: n.template, status: n.status });
+        }
+    }
+
+    // --- Build links referencing node IDs ---
+    graphLinks = displayEdges.map(e => ({
+        source: e.source_node,
+        target: e.target_node,
+        active: e.active,
+    }));
+
+    // --- D3 data join: Links ---
     const links = linkGroup.selectAll("line")
-        .data(displayEdges, d => `${d.source_node}-${d.target_node}`);
+        .data(graphLinks, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
 
     links.exit().remove();
 
-    links.enter()
+    const linksEnter = links.enter()
         .append("line")
-        .attr("class", d => `link ${d.active ? "active" : ""}`);
+        .attr("class", d => `link${d.active ? " active" : ""}`);
 
-    // Nodes
+    links.merge(linksEnter)
+        .attr("class", d => `link${d.active ? " active" : ""}`);
+
+    // --- D3 data join: Nodes ---
     const nodesSel = nodeGroup.selectAll("g.node")
-        .data(displayNodes, d => d.id);
+        .data(graphNodes, d => d.id);
 
     nodesSel.exit().remove();
 
@@ -71,48 +128,26 @@ function updateGraph(nodes, edges) {
             .on("drag", dragged)
             .on("end", dragEnded));
 
-    nodesEnter.append("circle")
-        .attr("r", 12)
-        .attr("class", d => `template-${d.template}`);
-
+    nodesEnter.append("circle").attr("r", 14);
     nodesEnter.append("text")
-        .attr("dy", 25)
-        .attr("text-anchor", "middle")
+        .attr("dy", 28)
+        .attr("text-anchor", "middle");
+
+    // Merge enter + update
+    const merged = nodesSel.merge(nodesEnter);
+
+    merged.select("circle")
+        .attr("r", d => d.status === "running" ? 17 : 14)
+        .attr("class", d => `template-${d.template}`)
+        .attr("opacity", d => d.status === "merged" ? 0.35 : 1);
+
+    merged.select("text")
         .text(d => d.template.replace(/_/g, " "));
 
-    // Update existing
-    nodeGroup.selectAll("circle")
-        .attr("r", d => d.status === "running" ? 15 : 12)
-        .attr("opacity", d => d.status === "merged" ? 0.4 : 1);
-
-    // Update simulation
-    const simNodes = displayNodes.map(n => ({
-        ...n,
-        x: n.x || undefined,
-        y: n.y || undefined,
-    }));
-
-    const simLinks = displayEdges.map(e => ({
-        source: e.source_node,
-        target: e.target_node,
-    }));
-
-    simulation.nodes(simNodes);
-    simulation.force("link").links(simLinks);
-    simulation.alpha(0.3).restart();
-
-    const allLinks = linkGroup.selectAll("line");
-    const allNodes = nodeGroup.selectAll("g.node");
-
-    simulation.on("tick", () => {
-        allLinks
-            .attr("x1", d => d.source.x)
-            .attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x)
-            .attr("y2", d => d.target.y);
-
-        allNodes.attr("transform", d => `translate(${d.x},${d.y})`);
-    });
+    // --- Update simulation ---
+    simulation.nodes(graphNodes);
+    simulation.force("link").links(graphLinks);
+    simulation.alpha(0.4).restart();
 }
 
 function dragStarted(event, d) {
@@ -176,7 +211,7 @@ async function loadEpisodeList() {
 
 function escapeHtml(text) {
     const div = document.createElement("div");
-    div.textContent = text;
+    div.textContent = text || "";
     return div.innerHTML;
 }
 
@@ -187,7 +222,6 @@ function escapeHtml(text) {
 async function openEpisode(episodeId) {
     currentEpisodeId = episodeId;
 
-    // Switch views
     document.getElementById("view-list").classList.remove("active");
     document.getElementById("view-detail").classList.add("active");
     document.getElementById("back-btn").style.display = "inline-block";
@@ -200,7 +234,6 @@ async function openEpisode(episodeId) {
 function showEpisodeList() {
     currentEpisodeId = null;
 
-    // Unsubscribe from realtime
     if (realtimeChannel) {
         sb.removeChannel(realtimeChannel);
         realtimeChannel = null;
@@ -210,7 +243,6 @@ function showEpisodeList() {
     document.getElementById("view-list").classList.add("active");
     document.getElementById("back-btn").style.display = "none";
 
-    // Reset status bar
     document.getElementById("status-indicator").textContent = "idle";
     document.getElementById("status-indicator").className = "status idle";
     document.getElementById("round-counter").textContent = "Round: —";
@@ -218,6 +250,16 @@ function showEpisodeList() {
     document.getElementById("node-counter").textContent = "Nodes: —";
 
     loadEpisodeList();
+}
+
+// Debounce refresh to avoid rapid-fire updates
+let refreshTimer = null;
+function scheduleRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        refreshEpisodeDetail();
+    }, 300);
 }
 
 async function refreshEpisodeDetail() {
@@ -257,6 +299,8 @@ async function refreshEpisodeDetail() {
         // Update branch scores
         if (episode && episode.branch_scores) {
             updateBranchScores(episode.branch_scores);
+        } else {
+            document.getElementById("branch-scores").innerHTML = "";
         }
 
         // Update artifacts
@@ -287,27 +331,27 @@ function subscribeRealtime(episodeId) {
         .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "nodes", filter: `episode_id=eq.${episodeId}` },
-            () => refreshEpisodeDetail()
+            () => scheduleRefresh()
         )
         .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "edges", filter: `episode_id=eq.${episodeId}` },
-            () => refreshEpisodeDetail()
+            () => scheduleRefresh()
         )
         .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "artifacts", filter: `episode_id=eq.${episodeId}` },
-            () => refreshEpisodeDetail()
+            () => scheduleRefresh()
         )
         .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "events", filter: `episode_id=eq.${episodeId}` },
-            () => refreshEpisodeDetail()
+            () => scheduleRefresh()
         )
         .on(
             "postgres_changes",
             { event: "UPDATE", schema: "public", table: "episodes", filter: `id=eq.${episodeId}` },
-            () => refreshEpisodeDetail()
+            () => scheduleRefresh()
         )
         .subscribe((status) => {
             if (status === "SUBSCRIBED") {
@@ -333,7 +377,7 @@ function updateBranchScores(scores) {
         .sort((a, b) => b[1] - a[1])
         .map(([bid, score]) => `
             <div class="branch-score">
-                <span style="width: 80px">${escapeHtml(bid)}</span>
+                <span style="width: 80px; flex-shrink: 0">${escapeHtml(bid)}</span>
                 <div class="bar">
                     <div class="bar-fill" style="width: ${(score * 100).toFixed(0)}%"></div>
                 </div>
@@ -344,9 +388,13 @@ function updateBranchScores(scores) {
 
 function updateArtifacts(artifacts) {
     const list = document.getElementById("artifact-list");
+    if (!artifacts || artifacts.length === 0) {
+        list.innerHTML = '<div class="empty-state">No artifacts yet</div>';
+        return;
+    }
     list.innerHTML = artifacts.map(a => `
         <div class="artifact-item" onclick="showArtifactDetail('${a.id}')">
-            <div class="type">[${escapeHtml(a.artifact_type)}] round ${a.round_produced}</div>
+            <div class="type">${escapeHtml(a.artifact_type)} · round ${a.round_produced}</div>
             <div class="summary">${escapeHtml(a.summary || "—")}</div>
         </div>
     `).join("");
@@ -359,37 +407,59 @@ async function showArtifactDetail(artifactId) {
         .eq("id", artifactId)
         .single();
 
-    if (data) {
-        console.log("Artifact detail:", data);
-        alert(`[${data.artifact_type}] ${data.summary}\n\n${JSON.stringify(data.content, null, 2).slice(0, 1000)}`);
-    }
+    if (!data) return;
+
+    const modal = document.getElementById("artifact-modal");
+    document.getElementById("modal-title").textContent =
+        `${data.artifact_type} — Round ${data.round_produced}`;
+    document.getElementById("modal-summary").textContent = data.summary || "";
+    document.getElementById("modal-content-pre").textContent =
+        JSON.stringify(data.content, null, 2);
+
+    modal.style.display = "flex";
+    // Trigger transition
+    requestAnimationFrame(() => modal.classList.add("visible"));
 }
+
+function closeArtifactModal() {
+    const modal = document.getElementById("artifact-modal");
+    modal.classList.remove("visible");
+    setTimeout(() => { modal.style.display = "none"; }, 250);
+}
+
+// Close modal on overlay click
+document.addEventListener("click", (e) => {
+    if (e.target.id === "artifact-modal") closeArtifactModal();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeArtifactModal();
+});
 
 function updateLogStream(events) {
     const log = document.getElementById("log-stream");
-    log.innerHTML = events.map(e => `
-        <div class="log-entry">
-            <span class="event-type">${escapeHtml(e.event_type)}</span>
-            ${e.round !== null ? `R${e.round}` : ""}
-            ${JSON.stringify(e.payload || {}).slice(0, 100)}
-        </div>
-    `).join("");
-}
-
-function addLogEntry(event) {
-    const log = document.getElementById("log-stream");
-    const entry = document.createElement("div");
-    entry.className = "log-entry";
-    entry.innerHTML = `<span class="event-type">${escapeHtml(event.event_type || "?")}</span> ${JSON.stringify(event.payload || {}).slice(0, 100)}`;
-    log.prepend(entry);
-    if (log.children.length > 200) log.removeChild(log.lastChild);
+    if (!events || events.length === 0) {
+        log.innerHTML = '<div class="empty-state">No events yet</div>';
+        return;
+    }
+    log.innerHTML = events.map(e => {
+        const roundTag = e.round !== null && e.round !== undefined
+            ? `<span class="round-tag">R${e.round}</span> `
+            : "";
+        const payload = escapeHtml(JSON.stringify(e.payload || {}).slice(0, 120));
+        return `
+            <div class="log-entry">
+                <span class="event-type">${escapeHtml(e.event_type)}</span>
+                ${roundTag}
+                <span class="payload-text">${payload}</span>
+            </div>
+        `;
+    }).join("");
 }
 
 // ============================================================
 // Init
 // ============================================================
 
-// Check URL params for direct episode link
 const urlParams = new URLSearchParams(window.location.search);
 const episodeParam = urlParams.get("episode");
 
