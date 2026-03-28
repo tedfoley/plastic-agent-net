@@ -36,8 +36,10 @@ class WorkspaceManager:
         return await self._create_tempdir(branch_id)
 
     async def _create_worktree(self, branch_id: str) -> Workspace:
-        worktree_path = self._temp_dir / f"wt_{branch_id}"
-        git_branch = f"pan/{branch_id}"
+        import uuid
+        suffix = uuid.uuid4().hex[:8]
+        worktree_path = self._temp_dir / f"wt_{branch_id}_{suffix}"
+        git_branch = f"pan/{branch_id}_{suffix}"
         proc = await asyncio.create_subprocess_exec(
             "git", "worktree", "add", "-b", git_branch,
             str(worktree_path), "HEAD",
