@@ -57,7 +57,7 @@ class AnthropicClient:
             kwargs["output_config"] = {
                 "format": {
                     "type": "json_schema",
-                    "json_schema": json_schema,
+                    "schema": json_schema,
                 }
             }
 
