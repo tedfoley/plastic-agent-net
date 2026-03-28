@@ -25,6 +25,23 @@ class LLMResponse:
         self.total_tokens = input_tokens + output_tokens
 
 
+def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Add additionalProperties: false to all object types recursively.
+
+    Anthropic structured outputs require this on every object in the schema.
+    """
+    schema = dict(schema)
+    if schema.get("type") == "object":
+        schema["additionalProperties"] = False
+        if "properties" in schema:
+            schema["properties"] = {
+                k: _strict_schema(v) for k, v in schema["properties"].items()
+            }
+    if "items" in schema:
+        schema["items"] = _strict_schema(schema["items"])
+    return schema
+
+
 class AnthropicClient:
     """Async client for Anthropic Claude models with tier selection."""
 
@@ -57,7 +74,7 @@ class AnthropicClient:
             kwargs["output_config"] = {
                 "format": {
                     "type": "json_schema",
-                    "schema": json_schema,
+                    "schema": _strict_schema(json_schema),
                 }
             }
 
