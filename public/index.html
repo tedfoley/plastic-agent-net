@@ -21,6 +21,10 @@
             <span id="round-counter">Round: —</span>
             <span id="token-counter">Tokens: —</span>
             <span id="node-counter">Nodes: —</span>
+            <div id="episode-actions" style="display:none">
+                <button class="action-btn pause" onclick="pauseEpisode()" title="Pause episode">Pause</button>
+                <button class="action-btn fail" onclick="failEpisode()" title="Mark as failed">Fail</button>
+            </div>
         </div>
     </header>
 
@@ -69,7 +73,7 @@
             </div>
             <div class="modal-body">
                 <p class="modal-summary" id="modal-summary"></p>
-                <pre id="modal-content-pre"></pre>
+                <div id="modal-body-content"></div>
             </div>
         </div>
     </div>

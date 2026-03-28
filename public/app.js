@@ -248,6 +248,7 @@ function showEpisodeList() {
     document.getElementById("round-counter").textContent = "Round: —";
     document.getElementById("token-counter").textContent = "Tokens: —";
     document.getElementById("node-counter").textContent = "Nodes: —";
+    document.getElementById("episode-actions").style.display = "none";
 
     loadEpisodeList();
 }
@@ -287,6 +288,7 @@ async function refreshEpisodeDetail() {
             indicator.className = `status ${episode.status}`;
             document.getElementById("round-counter").textContent = `Round: ${episode.rounds_completed}`;
             document.getElementById("token-counter").textContent = `Tokens: ${(episode.tokens_used || 0).toLocaleString()}`;
+            updateEpisodeActions(episode.status);
         }
 
         // Update node counter
@@ -413,18 +415,366 @@ async function showArtifactDetail(artifactId) {
     document.getElementById("modal-title").textContent =
         `${data.artifact_type} — Round ${data.round_produced}`;
     document.getElementById("modal-summary").textContent = data.summary || "";
-    document.getElementById("modal-content-pre").textContent =
-        JSON.stringify(data.content, null, 2);
+
+    const body = document.getElementById("modal-body-content");
+    body.innerHTML = renderArtifactContent(data.artifact_type, data.content);
 
     modal.style.display = "flex";
-    // Trigger transition
     requestAnimationFrame(() => modal.classList.add("visible"));
+}
+
+// ============================================================
+// Artifact Renderers
+// ============================================================
+
+function renderArtifactContent(type, content) {
+    if (!content) return '<p class="art-empty">No content</p>';
+    const renderer = ARTIFACT_RENDERERS[type];
+    if (renderer) {
+        try { return renderer(content); }
+        catch (e) { /* fall through to JSON */ }
+    }
+    return `<pre class="art-json">${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+}
+
+const ARTIFACT_RENDERERS = {
+    plan(c) {
+        let html = '';
+        if (c.strategy) {
+            html += `<div class="art-section">
+                <div class="art-label">Strategy</div>
+                <p class="art-text">${escapeHtml(c.strategy)}</p>
+            </div>`;
+        }
+        if (c.sub_tasks && c.sub_tasks.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Sub-tasks</div>
+                <div class="art-task-list">
+                    ${c.sub_tasks.map((t, i) => `
+                        <div class="art-task">
+                            <span class="art-task-num">${i + 1}</span>
+                            <div class="art-task-body">
+                                <div class="art-task-desc">${escapeHtml(t.description)}</div>
+                                <div class="art-task-meta">
+                                    <span class="art-pill">${escapeHtml(t.agent_type)}</span>
+                                    ${t.priority != null ? `<span class="art-pill secondary">P${t.priority}</span>` : ''}
+                                    ${t.estimated_complexity ? `<span class="art-pill secondary">${escapeHtml(t.estimated_complexity)}</span>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+        }
+        if (c.uncertainties && c.uncertainties.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Uncertainties</div>
+                <ul class="art-list">${c.uncertainties.map(u => `<li>${escapeHtml(u)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        if (c.candidate_files && c.candidate_files.length) {
+            html += renderFileList('Candidate Files', c.candidate_files);
+        }
+        if (c.needs_branching) {
+            html += `<div class="art-section"><span class="art-pill accent">Branching recommended</span></div>`;
+        }
+        return html;
+    },
+
+    repo_map(c) {
+        let html = '';
+        if (c.relevant_files && c.relevant_files.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Relevant Files</div>
+                <div class="art-file-list">
+                    ${c.relevant_files.map(f => `
+                        <div class="art-file-entry">
+                            <code class="art-filepath">${escapeHtml(f.path)}</code>
+                            <span class="art-file-rel">${escapeHtml(f.relevance)}</span>
+                            ${f.symbols && f.symbols.length ? `<div class="art-symbols">${f.symbols.map(s => `<code class="art-symbol">${escapeHtml(s)}</code>`).join(' ')}</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+        }
+        if (c.entry_points && c.entry_points.length) {
+            html += renderFileList('Entry Points', c.entry_points);
+        }
+        if (c.dependencies && c.dependencies.length) {
+            html += renderFileList('Dependencies', c.dependencies);
+        }
+        return html;
+    },
+
+    patch(c) {
+        let html = '';
+        if (c.confidence != null) {
+            const pct = Math.round(c.confidence * 100);
+            const color = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : 'var(--red)';
+            html += `<div class="art-section">
+                <div class="art-label">Confidence</div>
+                <div class="art-confidence">
+                    <div class="art-confidence-bar"><div class="art-confidence-fill" style="width:${pct}%;background:${color}"></div></div>
+                    <span style="color:${color};font-weight:600">${pct}%</span>
+                </div>
+            </div>`;
+        }
+        if (c.patches && c.patches.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Patches</div>
+                ${c.patches.map(p => `
+                    <div class="art-patch">
+                        <div class="art-patch-header"><code>${escapeHtml(p.file_path)}</code></div>
+                        ${p.rationale ? `<p class="art-patch-rationale">${escapeHtml(p.rationale)}</p>` : ''}
+                        <pre class="art-diff">${renderDiff(p.diff || '')}</pre>
+                    </div>
+                `).join('')}
+            </div>`;
+        }
+        if (c.risk_notes && c.risk_notes.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Risk Notes</div>
+                <ul class="art-list warning">${c.risk_notes.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        return html;
+    },
+
+    review(c) {
+        let html = '';
+        if (c.verdict) {
+            const colors = { approve: 'var(--green)', request_changes: 'var(--orange)', reject: 'var(--red)' };
+            const labels = { approve: 'Approved', request_changes: 'Changes Requested', reject: 'Rejected' };
+            html += `<div class="art-section">
+                <span class="art-verdict" style="background:${colors[c.verdict] || 'var(--text-tertiary)'}">${labels[c.verdict] || c.verdict}</span>
+            </div>`;
+        }
+        if (c.overall_assessment) {
+            html += `<div class="art-section">
+                <div class="art-label">Assessment</div>
+                <p class="art-text">${escapeHtml(c.overall_assessment)}</p>
+            </div>`;
+        }
+        if (c.issues && c.issues.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Issues</div>
+                <div class="art-issues">
+                    ${c.issues.map(iss => `
+                        <div class="art-issue art-issue-${iss.severity || 'minor'}">
+                            <span class="art-issue-badge">${escapeHtml(iss.severity || 'note')}</span>
+                            <div class="art-issue-body">
+                                ${iss.file_path ? `<code class="art-filepath">${escapeHtml(iss.file_path)}</code>` : ''}
+                                <p>${escapeHtml(iss.description)}</p>
+                                ${iss.suggestion ? `<p class="art-suggestion">${escapeHtml(iss.suggestion)}</p>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+        }
+        if (c.strengths && c.strengths.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Strengths</div>
+                <ul class="art-list success">${c.strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        return html;
+    },
+
+    verification(c) {
+        const checks = [
+            ['Build', c.build_passed],
+            ['Tests', c.tests_passed],
+            ['Lint', c.lint_passed],
+            ['Security', c.security_passed],
+        ];
+        let html = `<div class="art-section">
+            <div class="art-checks">
+                ${checks.map(([name, passed]) => `
+                    <div class="art-check">
+                        <span class="art-check-icon ${passed ? 'pass' : (passed === false ? 'fail' : 'skip')}">${passed ? '\u2713' : (passed === false ? '\u2717' : '\u2014')}</span>
+                        <span>${name}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+        if (c.overall_score != null) {
+            const pct = Math.round(c.overall_score * 100);
+            const color = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : 'var(--red)';
+            html += `<div class="art-section">
+                <div class="art-label">Overall Score</div>
+                <div class="art-confidence">
+                    <div class="art-confidence-bar"><div class="art-confidence-fill" style="width:${pct}%;background:${color}"></div></div>
+                    <span style="color:${color};font-weight:600">${pct}%</span>
+                </div>
+            </div>`;
+        }
+        if (c.blocking_issues && c.blocking_issues.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Blocking Issues</div>
+                <ul class="art-list warning">${c.blocking_issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        return html;
+    },
+
+    debug_report(c) {
+        let html = '';
+        if (c.root_cause) {
+            html += `<div class="art-section">
+                <div class="art-label">Root Cause</div>
+                <p class="art-text">${escapeHtml(c.root_cause)}</p>
+            </div>`;
+        }
+        if (c.confidence != null) {
+            const pct = Math.round(c.confidence * 100);
+            const color = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--orange)' : 'var(--red)';
+            html += `<div class="art-section">
+                <div class="art-label">Confidence</div>
+                <div class="art-confidence">
+                    <div class="art-confidence-bar"><div class="art-confidence-fill" style="width:${pct}%;background:${color}"></div></div>
+                    <span style="color:${color};font-weight:600">${pct}%</span>
+                </div>
+            </div>`;
+        }
+        if (c.evidence && c.evidence.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Evidence</div>
+                <ul class="art-list">${c.evidence.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        if (c.proposed_fix) {
+            html += `<div class="art-section">
+                <div class="art-label">Proposed Fix</div>
+                <div class="art-patch">
+                    ${c.proposed_fix.file_path ? `<div class="art-patch-header"><code>${escapeHtml(c.proposed_fix.file_path)}</code></div>` : ''}
+                    ${c.proposed_fix.explanation ? `<p class="art-patch-rationale">${escapeHtml(c.proposed_fix.explanation)}</p>` : ''}
+                    ${c.proposed_fix.diff ? `<pre class="art-diff">${renderDiff(c.proposed_fix.diff)}</pre>` : ''}
+                </div>
+            </div>`;
+        }
+        if (c.alternative_causes && c.alternative_causes.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Alternative Causes</div>
+                <ul class="art-list">${c.alternative_causes.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        return html;
+    },
+
+    test_code(c) {
+        let html = '';
+        if (c.test_files && c.test_files.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Test Files</div>
+                ${c.test_files.map(f => `
+                    <div class="art-patch">
+                        <div class="art-patch-header">
+                            <code>${escapeHtml(f.file_path)}</code>
+                            ${f.test_type ? `<span class="art-pill secondary">${escapeHtml(f.test_type)}</span>` : ''}
+                        </div>
+                        <pre class="art-code">${escapeHtml(f.content)}</pre>
+                    </div>
+                `).join('')}
+            </div>`;
+        }
+        if (c.coverage_notes) {
+            html += `<div class="art-section">
+                <div class="art-label">Coverage Notes</div>
+                <p class="art-text">${escapeHtml(c.coverage_notes)}</p>
+            </div>`;
+        }
+        return html;
+    },
+
+    synthesis(c) {
+        let html = '';
+        if (c.changes_summary) {
+            html += `<div class="art-section">
+                <div class="art-label">Changes Summary</div>
+                <p class="art-text">${escapeHtml(c.changes_summary)}</p>
+            </div>`;
+        }
+        if (c.final_patches && c.final_patches.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Final Patches</div>
+                ${c.final_patches.map(p => `
+                    <div class="art-patch">
+                        <div class="art-patch-header"><code>${escapeHtml(p.file_path)}</code></div>
+                        <pre class="art-diff">${renderDiff(p.diff || '')}</pre>
+                    </div>
+                `).join('')}
+            </div>`;
+        }
+        if (c.review_responses && c.review_responses.length) {
+            html += `<div class="art-section">
+                <div class="art-label">Review Responses</div>
+                <ul class="art-list">${c.review_responses.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        return html;
+    },
+};
+
+function renderDiff(diff) {
+    return diff.split('\n').map(line => {
+        const escaped = escapeHtml(line);
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+            return `<span class="diff-add">${escaped}</span>`;
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+            return `<span class="diff-del">${escaped}</span>`;
+        } else if (line.startsWith('@@')) {
+            return `<span class="diff-hunk">${escaped}</span>`;
+        }
+        return escaped;
+    }).join('\n');
+}
+
+function renderFileList(label, files) {
+    return `<div class="art-section">
+        <div class="art-label">${label}</div>
+        <div class="art-file-chips">${files.map(f => `<code class="art-filepath">${escapeHtml(f)}</code>`).join(' ')}</div>
+    </div>`;
 }
 
 function closeArtifactModal() {
     const modal = document.getElementById("artifact-modal");
     modal.classList.remove("visible");
     setTimeout(() => { modal.style.display = "none"; }, 250);
+}
+
+// ============================================================
+// Episode Actions (Pause / Fail)
+// ============================================================
+
+async function pauseEpisode() {
+    if (!currentEpisodeId) return;
+    if (!confirm("Pause this episode? The agent will stop after the current round.")) return;
+    await sb.from("episodes").update({
+        status: "paused",
+        terminated_reason: "manually_paused",
+    }).eq("id", currentEpisodeId);
+    scheduleRefresh();
+}
+
+async function failEpisode() {
+    if (!currentEpisodeId) return;
+    if (!confirm("Mark this episode as failed? This cannot be undone.")) return;
+    await sb.from("episodes").update({
+        status: "failed",
+        terminated_reason: "manually_failed",
+    }).eq("id", currentEpisodeId);
+    scheduleRefresh();
+}
+
+function updateEpisodeActions(status) {
+    const actions = document.getElementById("episode-actions");
+    if (!currentEpisodeId) {
+        actions.style.display = "none";
+        return;
+    }
+    const isActive = status === "running" || status === "pending";
+    actions.style.display = isActive ? "flex" : "none";
 }
 
 // Close modal on overlay click

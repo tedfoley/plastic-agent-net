@@ -157,6 +157,11 @@ class Episode:
                     result.terminated_reason = "converged"
                     break
 
+                # Check for manual pause/fail from dashboard
+                if await self._check_manual_stop():
+                    result.terminated_reason = "manually_stopped"
+                    break
+
                 # Reset pending nodes for next round
                 self._reset_done_nodes()
 
@@ -190,14 +195,25 @@ class Episode:
             # Finalize Supabase episode — inside finally so it always runs
             if self._supabase_repo and self._episode_id:
                 try:
-                    self._supabase_repo.update_episode(
-                        self._episode_id,
-                        status="completed" if "error" not in result.terminated_reason else "failed",
-                        rounds_completed=result.rounds_completed,
-                        tokens_used=result.tokens_used,
-                        branch_scores=result.branch_scores,
-                        terminated_reason=result.terminated_reason,
-                    )
+                    # Don't overwrite manually-set statuses (paused/failed from dashboard)
+                    if result.terminated_reason == "manually_stopped":
+                        # Status already set by dashboard; just update counters
+                        self._supabase_repo.update_episode(
+                            self._episode_id,
+                            rounds_completed=result.rounds_completed,
+                            tokens_used=result.tokens_used,
+                            branch_scores=result.branch_scores,
+                            terminated_reason=result.terminated_reason,
+                        )
+                    else:
+                        self._supabase_repo.update_episode(
+                            self._episode_id,
+                            status="completed" if "error" not in result.terminated_reason else "failed",
+                            rounds_completed=result.rounds_completed,
+                            tokens_used=result.tokens_used,
+                            branch_scores=result.branch_scores,
+                            terminated_reason=result.terminated_reason,
+                        )
                 except Exception:
                     logger.warning("Failed to finalize episode in Supabase", exc_info=True)
 
@@ -260,6 +276,19 @@ class Episode:
         best_score = max(ctrl_state.branch_scores.values())
         no_actions = len(ctrl_state.actions_taken) == 0
         return best_score >= 0.9 and no_actions
+
+    async def _check_manual_stop(self) -> bool:
+        """Check if the episode was paused or failed from the dashboard."""
+        if not self._supabase_repo or not self._episode_id:
+            return False
+        try:
+            ep = self._supabase_repo.get_episode(self._episode_id)
+            if ep and ep.get("status") in ("paused", "failed"):
+                logger.info("Episode manually stopped via dashboard: %s", ep["status"])
+                return True
+        except Exception:
+            pass
+        return False
 
     def _reset_done_nodes(self) -> None:
         """Reset DONE nodes back to PENDING for the next round."""
