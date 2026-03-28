@@ -52,6 +52,15 @@ class AnthropicClient:
         if system:
             kwargs["system"] = system
 
+        # Use structured outputs (constrained decoding) when a schema is provided
+        if json_schema is not None:
+            kwargs["output_config"] = {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": json_schema,
+                }
+            }
+
         response = await self._client.messages.create(**kwargs)
 
         content = ""
@@ -62,26 +71,30 @@ class AnthropicClient:
 
         parsed = None
         if json_schema is not None:
-            # Strip markdown code fences if present
-            text = content.strip()
-            if text.startswith("```"):
-                first_newline = text.find("\n")
-                if first_newline >= 0:
-                    text = text[first_newline + 1:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-
+            # With structured outputs the response should be valid JSON,
+            # but keep fallback parsing for robustness
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(content)
             except json.JSONDecodeError:
-                start = text.find("{")
-                end = text.rfind("}") + 1
-                if start >= 0 and end > start:
-                    try:
-                        parsed = json.loads(text[start:end])
-                    except json.JSONDecodeError:
-                        logger.warning("Failed to parse JSON from LLM response")
+                # Fallback: strip markdown fences and extract JSON
+                text = content.strip()
+                if text.startswith("```"):
+                    first_newline = text.find("\n")
+                    if first_newline >= 0:
+                        text = text[first_newline + 1:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    text = text.strip()
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError:
+                    start = text.find("{")
+                    end = text.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        try:
+                            parsed = json.loads(text[start:end])
+                        except json.JSONDecodeError:
+                            logger.warning("Failed to parse JSON from LLM response")
 
         return LLMResponse(
             content=content,
